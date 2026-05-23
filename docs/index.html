@@ -309,6 +309,8 @@
         <div id="section-teams" class="section-wrap"></div>
         <div id="section-profiles" class="section-wrap"></div>
         <div id="section-poa" class="section-wrap"></div>
+        <div id="section-risk" class="section-wrap"></div>
+        <div id="section-hierarchy" class="section-wrap"></div>
         <div id="section-copy" class="section-wrap"></div>
       </div>
 
@@ -373,7 +375,18 @@ const S = {
   hasAdminRoleFlag: false,
   orgDepthFlag: false,
   // nav
-  activeSection: null, // 'roles'|'teams'|'profiles'|'poa'|'copy'
+  activeSection: null, // 'roles'|'teams'|'profiles'|'poa'|'copy'|'risk'|'hierarchy'
+  // filters & sort
+  rolesSearch: '',
+  rolesBUFilter: 'all',
+  teamsSearch: '',
+  teamsTypeFilter: 'all',
+  profilesSearch: '',
+  ownerTeamsSearch: '',
+  ownerTeamsSort: {field:'name', dir:'asc'},
+  accessTeamsSearch: '',
+  accessTeamsSort: {field:'name', dir:'asc'},
+  poaSubSection: null,
 };
 
 /* ================================================================
@@ -578,6 +591,13 @@ async function fetchUserDetails(userId) {
   S.poaCount = null; S.accessTeamPOACount = null; S.ownerTeamPOACount = null;
   S.mailboxStatus = ''; S.userPosition = null; S.positionChildCount = null; S.positionUserCount = null;
   S.activeSection = null;
+  // reset filters
+  S.rolesSearch = ''; S.rolesBUFilter = 'all';
+  S.teamsSearch = ''; S.teamsTypeFilter = 'all';
+  S.profilesSearch = '';
+  S.ownerTeamsSearch = ''; S.accessTeamsSearch = '';
+  S.ownerTeamsSort = {field:'name',dir:'asc'}; S.accessTeamsSort = {field:'name',dir:'asc'};
+  S.poaSubSection = null;
   showPane('user-tiles');
   renderUserTiles();
 
@@ -757,6 +777,8 @@ function renderUserProfileCard() {
     <div class="profile-field"><div class="pf-label">Business Unit</div><div class="pf-value">${esc(u['_businessunitid_value@OData.Community.Display.V1.FormattedValue']||u['_businessunitid_value']||'—')}</div></div>
     <div class="profile-field"><div class="pf-label">Access Mode</div><div class="pf-value">${esc(accessMap[u.accessmode]||u.accessmode)}</div></div>
     <div class="profile-field"><div class="pf-label">Mailbox Status</div><div class="pf-value">${esc(S.mailboxStatus||'…')}</div></div>
+    <div class="profile-field"><div class="pf-label">Licensed</div><div class="pf-value"><span class="badge ${u.islicensed?'badge-ok':'badge-warn'}">${u.islicensed?'Yes':'No'}</span></div></div>
+    <div class="profile-field"><div class="pf-label">Status</div><div class="pf-value"><span class="badge ${u.isdisabled?'badge-danger':'badge-ok'}">${u.isdisabled?'Disabled':'Active'}</span></div></div>
   `;
 }
 
@@ -817,7 +839,17 @@ function renderUserTiles() {
       <div class="tile-value" style="color:${poaCol}">${poaVal}</div>
       <div class="tile-sub">Access team: ${S.loadingPOA?'…':fmtNum(S.accessTeamPOACount)}</div>
     </div>
-    <div class="tile" data-section="copy">
+    <div class="tile ${S.activeSection==='risk'?'active':''}" data-section="risk" style="border-color:${rc}55;background:${S.activeSection==='risk'?'#EFF6FC':rc+'11'}">
+      <div class="tile-label">Risk Summary</div>
+      <div class="tile-value" style="color:${rc};font-size:18px;">${risk==='Critical'?'🔴':risk==='High'?'🟠':risk==='Medium'?'🟡':'🟢'} ${esc(risk)}</div>
+      <div class="tile-sub">Click for details</div>
+    </div>
+    <div class="tile ${S.activeSection==='hierarchy'?'active':''}" data-section="hierarchy">
+      <div class="tile-label">Hierarchy Position</div>
+      <div class="tile-value" style="font-size:14px;font-weight:600;line-height:1.4;">${esc(S.userPosition?.name||'Not Assigned')}</div>
+      ${S.userPosition?.parentName ? `<div class="tile-sub">↑ ${esc(S.userPosition.parentName)}</div>` : ''}
+    </div>
+    <div class="tile ${S.activeSection==='copy'?'active':''}" data-section="copy">
       <div class="tile-label">Review Summary</div>
       <div class="tile-value" style="font-size:18px;">📋</div>
       <div class="tile-sub">Copy / download</div>
@@ -837,6 +869,8 @@ function renderSection(name) {
     case 'teams':     renderSectionTeams(); break;
     case 'profiles':  renderSectionProfiles(); break;
     case 'poa':       renderSectionPOA(); break;
+    case 'risk':      renderSectionRisk(); break;
+    case 'hierarchy': renderSectionHierarchy(); break;
     case 'copy':      renderSectionCopy(); break;
   }
   showSection(name);
@@ -846,7 +880,24 @@ function renderSectionRoles() {
   const el = document.getElementById('section-direct-roles');
   if (!el) return;
   const userBU = S.selectedUser?.['_businessunitid_value'];
-  const rows = S.directRoles.map(r => {
+
+  // Collect unique BUs for dropdown
+  const buMap = {};
+  S.directRoles.forEach(r => {
+    if (r['_businessunitid_value']) {
+      buMap[r['_businessunitid_value']] = r['_businessunitid_value@OData.Community.Display.V1.FormattedValue'] || r['_businessunitid_value'];
+    }
+  });
+  const buOptions = Object.entries(buMap).map(([id, name]) =>
+    `<option value="${esc(id)}" ${S.rolesBUFilter===id?'selected':''}>${esc(name)}</option>`
+  ).join('');
+
+  // Apply filters
+  let filtered = S.directRoles;
+  if (S.rolesSearch) filtered = filtered.filter(r => r.name.toLowerCase().includes(S.rolesSearch.toLowerCase()));
+  if (S.rolesBUFilter !== 'all') filtered = filtered.filter(r => r['_businessunitid_value'] === S.rolesBUFilter);
+
+  const rows = filtered.map(r => {
     const buName = r['_businessunitid_value@OData.Community.Display.V1.FormattedValue'] || r['_businessunitid_value'] || '—';
     const crossBU = r['_businessunitid_value'] && r['_businessunitid_value'] !== userBU;
     const hp = r.name.includes('System Administrator') || r.name.includes('System Customizer');
@@ -858,11 +909,18 @@ function renderSectionRoles() {
       <td>${hp?'<span class="badge badge-danger">High privilege</span>':''}</td>
       <td>${dup?'<span class="badge badge-warn">Duplicate</span>':''}</td>
     </tr>`;
-  }).join('') || '<tr><td colspan="5" style="text-align:center;color:var(--muted)">No direct roles</td></tr>';
+  }).join('') || '<tr><td colspan="5" style="text-align:center;color:var(--muted)">No direct roles match filters</td></tr>';
 
   el.innerHTML = `
     <h2 style="margin-bottom:14px;">Direct Security Roles (${S.directRoles.length})</h2>
     ${S.tooManyRolesFlag?'<div class="warn-box">⚠ More than 5 direct roles assigned — review and reduce.</div>':''}
+    <div class="filter-row">
+      <input id="inp-roles-search" type="text" placeholder="Search role name…" value="${esc(S.rolesSearch)}" style="flex:1;min-width:160px">
+      <select id="inp-roles-bu">
+        <option value="all" ${S.rolesBUFilter==='all'?'selected':''}>All BUs</option>
+        ${buOptions}
+      </select>
+    </div>
     <div class="table-wrap">
       <table class="data-table">
         <thead><tr><th>Role Name</th><th>Role BU</th><th>Cross-BU</th><th>Privilege</th><th>Duplicate</th></tr></thead>
@@ -882,20 +940,38 @@ function renderSectionRoles() {
 function renderSectionTeams() {
   const el = document.getElementById('section-teams');
   if (!el) return;
-  const typeMap = {0:'Owner',1:'Access',2:'AAD Group (Owner)',3:'AAD Group (Access)'};
-  const rows = S.teams.map(t => {
+  const typeMap = {0:'Owner (0)',1:'Access (1)',2:'AAD Security (2)',3:'AAD Office (3)',4:'AAD Channel (4)'};
+
+  // Apply filters
+  let filtered = S.teams;
+  if (S.teamsSearch) filtered = filtered.filter(t => t.name.toLowerCase().includes(S.teamsSearch.toLowerCase()));
+  if (S.teamsTypeFilter !== 'all') filtered = filtered.filter(t => String(t.teamtype) === S.teamsTypeFilter);
+
+  const rows = filtered.map(t => {
     const buName = t['_businessunitid_value@OData.Community.Display.V1.FormattedValue'] || t['_businessunitid_value'] || '—';
     const isAccess = t.teamtype === 1;
     return `<tr>
       <td>${esc(t.name)}</td>
-      <td>${esc(typeMap[t.teamtype]||t.teamtype)}</td>
+      <td>${esc(typeMap[t.teamtype]||String(t.teamtype))}</td>
       <td>${esc(buName)}</td>
       <td>${isAccess?'<span class="badge badge-warn">POA risk</span>':''}</td>
     </tr>`;
-  }).join('') || '<tr><td colspan="4" style="text-align:center;color:var(--muted)">No team memberships</td></tr>';
+  }).join('') || '<tr><td colspan="4" style="text-align:center;color:var(--muted)">No team memberships match filters</td></tr>';
+
   el.innerHTML = `
     <h2 style="margin-bottom:14px;">Team Memberships (${S.teams.length})</h2>
     ${S.teams.some(t=>t.teamtype===1)?'<div class="info-box">ℹ Access Team memberships can create POA (Principal Object Access) records which may affect performance.</div>':''}
+    <div class="filter-row">
+      <input id="inp-teams-search" type="text" placeholder="Search team name…" value="${esc(S.teamsSearch)}" style="flex:1;min-width:160px">
+      <select id="inp-teams-type">
+        <option value="all" ${S.teamsTypeFilter==='all'?'selected':''}>All types</option>
+        <option value="0" ${S.teamsTypeFilter==='0'?'selected':''}>Owner (0)</option>
+        <option value="1" ${S.teamsTypeFilter==='1'?'selected':''}>Access (1)</option>
+        <option value="2" ${S.teamsTypeFilter==='2'?'selected':''}>AAD Security (2)</option>
+        <option value="3" ${S.teamsTypeFilter==='3'?'selected':''}>AAD Office (3)</option>
+        <option value="4" ${S.teamsTypeFilter==='4'?'selected':''}>AAD Channel (4)</option>
+      </select>
+    </div>
     <div class="table-wrap">
       <table class="data-table">
         <thead><tr><th>Team Name</th><th>Type</th><th>BU</th><th>Flags</th></tr></thead>
@@ -908,11 +984,19 @@ function renderSectionTeams() {
 function renderSectionProfiles() {
   const el = document.getElementById('section-profiles');
   if (!el) return;
-  const rows = S.fieldProfiles.map(p => `<tr><td>${esc(p.name)}</td><td>Direct</td></tr>`).join('')
-    || '<tr><td colspan="2" style="text-align:center;color:var(--muted)">No field security profiles</td></tr>';
+
+  // Apply filter
+  let filtered = S.fieldProfiles;
+  if (S.profilesSearch) filtered = filtered.filter(p => p.name.toLowerCase().includes(S.profilesSearch.toLowerCase()));
+
+  const rows = filtered.map(p => `<tr><td>${esc(p.name)}</td><td>Direct</td></tr>`).join('')
+    || '<tr><td colspan="2" style="text-align:center;color:var(--muted)">No field security profiles match filter</td></tr>';
   el.innerHTML = `
     <h2 style="margin-bottom:14px;">Field Security Profiles (${S.fieldProfiles.length})</h2>
     ${S.tooManyProfilesFlag?'<div class="warn-box">⚠ More than 3 field security profiles assigned — review necessity.</div>':''}
+    <div class="filter-row">
+      <input id="inp-profiles-search" type="text" placeholder="Search profile name…" value="${esc(S.profilesSearch)}" style="flex:1;min-width:160px">
+    </div>
     <div class="table-wrap">
       <table class="data-table">
         <thead><tr><th>Profile Name</th><th>Assignment</th></tr></thead>
@@ -925,12 +1009,20 @@ function renderSectionProfiles() {
 function renderSectionPOA() {
   const el = document.getElementById('section-poa');
   if (!el) return;
+
+  if (S.poaSubSection === 'owner-teams') { renderPOASubTeams(el, 'owner'); return; }
+  if (S.poaSubSection === 'access-teams') { renderPOASubTeams(el, 'access'); return; }
+
   const total = S.poaCount || 0;
   const pct = Math.min(100, total / 500);
   const col = poaColor(total);
   el.innerHTML = `
     <h2 style="margin-bottom:14px;">POA &amp; Sharing Risk</h2>
     ${S.loadingPOA?'<div class="info-box">⏳ Still loading POA counts…</div>':''}
+    <div style="display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap">
+      <button class="btn-sec" id="btn-poa-owner">👥 Owner Teams (${S.teams.filter(t=>t.teamtype===0).length})</button>
+      <button class="btn-sec" id="btn-poa-access">🔗 Access Teams (${S.teams.filter(t=>t.teamtype===1).length})</button>
+    </div>
     <div class="table-wrap" style="padding:16px">
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
         <div>
@@ -948,8 +1040,168 @@ function renderSectionPOA() {
       </div>
     </div>
     <div class="info-box" style="margin-top:0">
-      💡 POA thresholds: &lt;1 000 = Healthy · 1 000–10 000 = Monitor · 10 000–50 000 = Review · &gt;50 000 = Critical
+      💡 <strong>POA thresholds:</strong>
+      <table class="data-table" style="margin-top:8px;background:#fff">
+        <thead><tr><th>Range</th><th>Status</th><th>Action</th></tr></thead>
+        <tbody>
+          <tr><td>&lt; 1,000</td><td><span class="badge badge-ok">Healthy</span></td><td>No action needed</td></tr>
+          <tr><td>1,000 – 10,000</td><td><span class="badge badge-warn">Monitor</span></td><td>Monitor and review access</td></tr>
+          <tr><td>10,000 – 50,000</td><td><span class="badge" style="background:#FFE0CC;color:#884400">Review</span></td><td>Reduce sharing if possible</td></tr>
+          <tr><td>&gt; 50,000</td><td><span class="badge badge-danger">Critical</span></td><td>Reduce POA sharing immediately</td></tr>
+        </tbody>
+      </table>
     </div>
+  `;
+  document.getElementById('btn-poa-owner')?.addEventListener('click', () => { S.poaSubSection = 'owner-teams'; renderSection('poa'); });
+  document.getElementById('btn-poa-access')?.addEventListener('click', () => { S.poaSubSection = 'access-teams'; renderSection('poa'); });
+}
+
+function renderPOASubTeams(el, type) {
+  const isOwner = type === 'owner';
+  const teams = S.teams.filter(t => t.teamtype === (isOwner ? 0 : 1));
+  const search = isOwner ? S.ownerTeamsSearch : S.accessTeamsSearch;
+  const sort = isOwner ? S.ownerTeamsSort : S.accessTeamsSort;
+  const searchId = isOwner ? 'inp-owner-search' : 'inp-access-search';
+  const title = isOwner ? 'Owner Teams' : 'Access Teams';
+
+  let filtered = teams;
+  if (search) filtered = filtered.filter(t => t.name.toLowerCase().includes(search.toLowerCase()));
+  filtered = [...filtered].sort((a, b) => {
+    let av, bv;
+    if (sort.field === 'bu') {
+      av = a['_businessunitid_value@OData.Community.Display.V1.FormattedValue'] || a['_businessunitid_value'] || '';
+      bv = b['_businessunitid_value@OData.Community.Display.V1.FormattedValue'] || b['_businessunitid_value'] || '';
+    } else {
+      av = a.name || ''; bv = b.name || '';
+    }
+    const cmp = av.toString().localeCompare(bv.toString());
+    return sort.dir === 'asc' ? cmp : -cmp;
+  });
+
+  const si = (f) => sort.field === f ? (sort.dir === 'asc' ? ' ▲' : ' ▼') : ' ⇅';
+  const rows = filtered.map(t => {
+    const buName = t['_businessunitid_value@OData.Community.Display.V1.FormattedValue'] || t['_businessunitid_value'] || '—';
+    return `<tr><td>${esc(t.name)}</td><td>${esc(buName)}</td></tr>`;
+  }).join('') || `<tr><td colspan="2" style="text-align:center;color:var(--muted)">No ${title.toLowerCase()}</td></tr>`;
+
+  el.innerHTML = `
+    <h2 style="margin-bottom:10px;">${title} (${teams.length})</h2>
+    <button class="back-btn" id="btn-poa-back">← Back to POA overview</button>
+    <div class="filter-row">
+      <input id="${searchId}" type="text" placeholder="Search team name…" value="${esc(search)}" style="flex:1;min-width:160px">
+    </div>
+    <div class="table-wrap">
+      <table class="data-table">
+        <thead><tr>
+          <th class="sortable-th" data-sort-field="name" style="cursor:pointer">Team Name${si('name')}</th>
+          <th class="sortable-th" data-sort-field="bu" style="cursor:pointer">BU${si('bu')}</th>
+        </tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>
+  `;
+  document.getElementById('btn-poa-back')?.addEventListener('click', () => { S.poaSubSection = null; renderSection('poa'); });
+  el.querySelectorAll('.sortable-th').forEach(th => {
+    th.addEventListener('click', () => {
+      const f = th.dataset.sortField;
+      if (isOwner) {
+        S.ownerTeamsSort = S.ownerTeamsSort.field === f
+          ? {field: f, dir: S.ownerTeamsSort.dir === 'asc' ? 'desc' : 'asc'}
+          : {field: f, dir: 'asc'};
+      } else {
+        S.accessTeamsSort = S.accessTeamsSort.field === f
+          ? {field: f, dir: S.accessTeamsSort.dir === 'asc' ? 'desc' : 'asc'}
+          : {field: f, dir: 'asc'};
+      }
+      renderSection('poa');
+    });
+  });
+}
+
+function renderSectionRisk() {
+  const el = document.getElementById('section-risk');
+  if (!el) return;
+  const risk = calculateRisk();
+  const rc = riskColor(risk);
+  const flags = [
+    {name:'Cross-BU Role',       val:S.crossBUFlag,        desc:'A security role belongs to a different Business Unit than the user.'},
+    {name:'High Privilege',       val:S.highPrivilegeFlag,   desc:'System Administrator or System Customizer role assigned.'},
+    {name:'Too Many Roles (>5)',  val:S.tooManyRolesFlag,   desc:`${S.directRoles.length} direct roles — more than 5 increases risk surface.`},
+    {name:'Too Many Profiles (>3)',val:S.tooManyProfilesFlag,desc:`${S.fieldProfiles.length} field security profiles — more than 3 is unusual.`},
+    {name:'Duplicate Roles',      val:S.duplicateRolesFlag, desc:'Same role assigned both directly and via a team.'},
+    {name:'Org-Depth Privileges', val:S.orgDepthFlag,       desc:'Organization-level privileges grant access to all records regardless of BU.'},
+  ];
+  const riskDescs = {
+    Low:      'No significant risk flags detected. Continue monitoring as usual.',
+    Medium:   'Some risk indicators present. Review flagged items and take corrective action where needed.',
+    High:     'Multiple risk flags detected or high-privilege roles assigned. Immediate review recommended.',
+    Critical: 'Critical risk level — potential for excessive access and performance issues. Act immediately.',
+  };
+  const poaVal = S.poaCount != null ? S.poaCount : 0;
+  const poacol = poaColor(poaVal);
+  const poaLabel = poaVal<=1000?'Healthy':poaVal<=10000?'Monitor':poaVal<=50000?'Review':'Critical';
+  const poaBadge = poaVal<=1000?'badge-ok':poaVal<=10000?'badge-warn':poaVal<=50000?'':'badge-danger';
+  const poaStyle = (poaVal>10000&&poaVal<=50000)?' style="background:#FFE0CC;color:#884400"':'';
+
+  el.innerHTML = `
+    <h2 style="margin-bottom:14px;">Risk Summary</h2>
+    <div style="margin-bottom:20px">
+      <div class="risk-badge" style="background:${rc}22;color:${rc};border:1px solid ${rc}44;font-size:18px;padding:10px 22px;display:inline-flex">
+        ${risk==='Critical'?'🔴':risk==='High'?'🟠':risk==='Medium'?'🟡':'🟢'} ${esc(risk)} Risk
+      </div>
+      <div style="margin-top:10px;font-size:13px;color:var(--muted)">${esc(riskDescs[risk]||'')}</div>
+    </div>
+    <div class="table-wrap" style="margin-bottom:16px">
+      <table class="data-table">
+        <thead><tr><th>Flag</th><th>Status</th><th>Description</th></tr></thead>
+        <tbody>${flags.map(f=>`<tr>
+          <td>${esc(f.name)}</td>
+          <td>${f.val?'<span class="badge badge-danger">⚠ True</span>':'<span class="badge badge-ok">✓ False</span>'}</td>
+          <td style="color:var(--muted);font-size:12px">${esc(f.desc)}</td>
+        </tr>`).join('')}</tbody>
+      </table>
+    </div>
+    <div style="font-size:13px">
+      POA count: <strong style="color:${poacol}">${fmtNum(poaVal)}</strong>
+      <span class="badge ${poaBadge}"${poaStyle}>${poaLabel}</span>
+    </div>
+  `;
+}
+
+function renderSectionHierarchy() {
+  const el = document.getElementById('section-hierarchy');
+  if (!el) return;
+  const pos = S.userPosition;
+  const o = S.orgStats;
+  const modelName = o ? (o.hierarchyEnabled ? `Position (depth ${o.hierarchyDepth ?? '?'})` : 'Disabled') : '—';
+
+  el.innerHTML = `
+    <h2 style="margin-bottom:14px;">Hierarchy Position</h2>
+    <div class="table-wrap" style="padding:16px;margin-bottom:16px">
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
+        <div>
+          <div class="profile-field"><div class="pf-label">Position Name</div><div class="pf-value">${esc(pos?.name||'Not Assigned')}</div></div>
+          <div class="profile-field" style="margin-top:10px"><div class="pf-label">Parent Position</div><div class="pf-value">${esc(pos?.parentName||'—')}</div></div>
+        </div>
+        <div>
+          <div class="profile-field"><div class="pf-label">Sub-positions</div><div class="pf-value">${fmtNum(S.positionChildCount)}</div></div>
+          <div class="profile-field" style="margin-top:10px"><div class="pf-label">Users at this position</div><div class="pf-value">${fmtNum(S.positionUserCount)}</div></div>
+        </div>
+      </div>
+    </div>
+    ${o ? `
+    <h3 style="margin-bottom:10px;">Org Hierarchy Context</h3>
+    <div class="table-wrap">
+      <table class="data-table">
+        <thead><tr><th>Setting</th><th>Value</th></tr></thead>
+        <tbody>
+          <tr><td>Hierarchy Model</td><td>${esc(modelName)}</td></tr>
+          <tr><td>Max Depth</td><td>${o.hierarchyDepth != null ? o.hierarchyDepth : '—'}</td></tr>
+          <tr><td>Total Positions</td><td>${fmtNum(o.totalPositions)}</td></tr>
+          <tr><td>Users with Position Assigned</td><td>${fmtNum(o.usersWithPosition)}</td></tr>
+        </tbody>
+      </table>
+    </div>` : ''}
   `;
 }
 
@@ -958,6 +1210,7 @@ function renderSectionCopy() {
   if (!el) return;
   const u = S.selectedUser;
   const risk = calculateRisk();
+  const accessMap = {0:'Read-Write',1:'Admin',2:'Non-Interactive',3:'Delegated',4:'Support',5:'Selective'};
   const lines = [
     `=== D365 User Security Review ===`,
     `Generated: ${new Date().toLocaleString()}`,
@@ -967,6 +1220,9 @@ function renderSectionCopy() {
     `Email: ${u?.internalemailaddress || '—'}`,
     `Job Title: ${u?.jobtitle || '—'}`,
     `Business Unit: ${u?.['_businessunitid_value@OData.Community.Display.V1.FormattedValue'] || '—'}`,
+    `Access Mode: ${accessMap[u?.accessmode] || u?.accessmode || '—'}`,
+    `Licensed: ${u?.islicensed ? 'Yes' : 'No'}`,
+    `Disabled: ${u?.isdisabled ? 'Yes' : 'No'}`,
     ``,
     `RISK RATING: ${risk}`,
     ``,
@@ -1150,6 +1406,16 @@ document.addEventListener('DOMContentLoaded', () => {
       S.searchText = e.target.value;
       S.searchTimer = setTimeout(() => searchUsers(S.searchText), 350);
     }
+    if (e.target.id === 'inp-roles-search')    { S.rolesSearch = e.target.value; renderSection('roles'); }
+    if (e.target.id === 'inp-teams-search')    { S.teamsSearch = e.target.value; renderSection('teams'); }
+    if (e.target.id === 'inp-profiles-search') { S.profilesSearch = e.target.value; renderSection('profiles'); }
+    if (e.target.id === 'inp-owner-search')    { S.ownerTeamsSearch = e.target.value; renderSection('poa'); }
+    if (e.target.id === 'inp-access-search')   { S.accessTeamsSearch = e.target.value; renderSection('poa'); }
+  });
+
+  document.addEventListener('change', e => {
+    if (e.target.id === 'inp-roles-bu')    { S.rolesBUFilter = e.target.value; renderSection('roles'); }
+    if (e.target.id === 'inp-teams-type')  { S.teamsTypeFilter = e.target.value; renderSection('teams'); }
   });
 });
 </script>
