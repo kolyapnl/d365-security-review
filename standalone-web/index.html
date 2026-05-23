@@ -261,6 +261,7 @@
       D365 Security Review
     </div>
     <div class="topbar-env" id="topbar-env"></div>
+    <div id="session-timer" style="font-size:12px;color:var(--muted);white-space:nowrap"></div>
     <button class="topbar-btn" id="btn-copy-review" style="display:none">📋 Copy Review</button>
     <button class="topbar-btn" id="btn-signout">Sign out</button>
   </div>
@@ -1081,6 +1082,29 @@ document.addEventListener('DOMContentLoaded', () => {
 
       showScreen('dashboard');
       setLoadingMsg('');
+
+      // Auto-expire session after 5 minutes — clears token from memory and localStorage
+      const SESSION_MS = 5 * 60 * 1000;
+      const expireAt = Date.now() + SESSION_MS;
+      if (S._sessionTimer) clearInterval(S._sessionTimer);
+      S._sessionTimer = setInterval(() => {
+        const remaining = expireAt - Date.now();
+        const timerEl = document.getElementById('session-timer');
+        if (remaining <= 0) {
+          clearInterval(S._sessionTimer);
+          // Clear MSAL cache from localStorage
+          Object.keys(localStorage).filter(k => k.startsWith('msal.')).forEach(k => localStorage.removeItem(k));
+          S.account = null;
+          showScreen('setup');
+          document.getElementById('setup-error').textContent = 'Session expired after 5 minutes. Please reconnect.';
+          document.getElementById('setup-error').style.display = 'block';
+          if (timerEl) timerEl.textContent = '';
+        } else {
+          const m = Math.floor(remaining / 60000);
+          const s = Math.floor((remaining % 60000) / 1000);
+          if (timerEl) timerEl.textContent = `⏱ Session: ${m}:${String(s).padStart(2,'0')}`;
+        }
+      }, 1000);
 
       // Initial data
       searchUsers('');
