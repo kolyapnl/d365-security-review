@@ -4,8 +4,8 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>D365 User Security Review</title>
-  <!-- MSAL.js 3.x — Microsoft's own CDN, no npm, no build -->
-  <script src="https://alcdn.msauth.net/browser/3.28.0/js/msal-browser.min.js"></script>
+  <!-- MSAL.js v2 UMD — Microsoft CDN, exposes window.msal global, no npm/build needed -->
+  <script src="https://alcdn.msauth.net/browser/2.32.0/js/msal-browser.min.js"></script>
   <!--
     TOOL OWNER: Register ONE multitenant Azure AD app (SPA, Dynamics CRM user_impersonation).
     Paste the Application (client) ID below. Customers never need their own app registration.
@@ -1069,9 +1069,8 @@ document.addEventListener('DOMContentLoaded', () => {
     setLoadingMsg('Initialising MSAL…');
     try {
       initMsal();
-      await S.msal.initialize();
 
-      // Handle redirect callback first
+      // v2: no initialize() — handleRedirectPromise handles redirect flow
       const resp = await S.msal.handleRedirectPromise();
       if (resp) S.account = resp.account;
 
