@@ -1,0 +1,1134 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>D365 User Security Review</title>
+  <!-- MSAL.js 3.x — no npm, pure CDN -->
+  <script src="https://cdn.jsdelivr.net/npm/@azure/msal-browser@3/dist/msal-browser.min.js"></script>
+  <!--
+    TOOL OWNER: Register ONE multitenant Azure AD app (SPA, Dynamics CRM user_impersonation).
+    Paste the Application (client) ID below. Customers never need their own app registration.
+  -->
+  <script>const APP_CLIENT_ID = '2d53776a-b3d8-4a4a-8d5b-3b12a9135d07';</script>
+  <style>
+    :root {
+      --bg: #F3F2F1; --white: #fff; --border: #EDEBE9; --text: #323130;
+      --muted: #605E5C; --blue: #0078D4; --blue-hover: #106EBE;
+      --green: #107C10; --yellow: #FFB900; --orange: #FF8C00; --red: #D13438;
+      --radius: 8px; --shadow: 0 1px 4px rgba(0,0,0,0.10);
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: 'Segoe UI', system-ui, sans-serif; background: var(--bg); color: var(--text); font-size: 14px; line-height: 1.5; }
+    a { color: var(--blue); }
+    h2 { font-size: 16px; font-weight: 600; }
+    h3 { font-size: 14px; font-weight: 600; }
+
+    /* ── Setup screen ──────────────────────────────── */
+    #screen-setup {
+      min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 24px;
+    }
+    .setup-card {
+      background: var(--white); border-radius: 12px; box-shadow: 0 4px 24px rgba(0,0,0,0.12);
+      padding: 40px; max-width: 420px; width: 100%;
+    }
+    .setup-logo { display: flex; align-items: center; gap: 12px; margin-bottom: 8px; }
+    .setup-logo h1 { font-size: 20px; font-weight: 600; }
+    .setup-sub { color: var(--muted); font-size: 13px; margin-bottom: 28px; }
+    .field { margin-bottom: 16px; }
+    .field label { display: block; font-size: 13px; font-weight: 600; margin-bottom: 5px; }
+    .field input {
+      width: 100%; padding: 8px 12px; border: 1px solid #C8C6C4; border-radius: 4px;
+      font-size: 14px; outline: none; transition: border-color 0.15s;
+    }
+    .field input:focus { border-color: var(--blue); box-shadow: 0 0 0 1px var(--blue); }
+    .field .hint { font-size: 11px; color: #888; margin-top: 4px; }
+    .btn-primary {
+      width: 100%; padding: 10px; background: var(--blue); color: #fff; border: none;
+      border-radius: 4px; font-size: 14px; font-weight: 600; cursor: pointer; transition: background 0.15s;
+    }
+    .btn-primary:hover { background: var(--blue-hover); }
+    .btn-primary:disabled { background: #A0A0A0; cursor: not-allowed; }
+    .setup-error {
+      background: #FDE7E9; border: 1px solid var(--red); border-radius: 4px;
+      padding: 8px 12px; margin-bottom: 14px; font-size: 13px; color: var(--red); display: none;
+    }
+
+    /* ── Loading overlay ─────────────────────────── */
+    #screen-loading {
+      min-height: 100vh; display: none; flex-direction: column;
+      align-items: center; justify-content: center; gap: 16px;
+    }
+    .spinner {
+      width: 40px; height: 40px; border: 3px solid var(--border); border-top-color: var(--blue);
+      border-radius: 50%; animation: spin 0.8s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* ── Dashboard ───────────────────────────────── */
+    #screen-dashboard { display: none; flex-direction: column; min-height: 100vh; }
+    .topbar {
+      background: var(--white); border-bottom: 1px solid var(--border);
+      padding: 0 24px; height: 48px; display: flex; align-items: center; gap: 12px;
+      position: sticky; top: 0; z-index: 100;
+    }
+    .topbar-logo { display: flex; align-items: center; gap: 8px; font-weight: 600; font-size: 15px; }
+    .topbar-env { font-size: 12px; color: var(--muted); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .topbar-btn {
+      padding: 5px 12px; border: 1px solid var(--border); border-radius: 4px;
+      background: var(--white); font-size: 12px; cursor: pointer; white-space: nowrap;
+    }
+    .topbar-btn:hover { background: var(--bg); }
+
+    .dashboard-body { display: flex; flex: 1; min-height: 0; }
+    .sidebar {
+      width: 280px; min-width: 280px; background: var(--white);
+      border-right: 1px solid var(--border); padding: 16px; overflow-y: auto;
+      display: flex; flex-direction: column; gap: 12px;
+    }
+    .main-pane { flex: 1; padding: 20px; overflow-y: auto; }
+
+    /* User picker */
+    .user-search-wrap { position: relative; }
+    .user-search-wrap input {
+      width: 100%; padding: 7px 10px 7px 32px; border: 1px solid #C8C6C4; border-radius: 4px;
+      font-size: 13px; outline: none;
+    }
+    .user-search-wrap input:focus { border-color: var(--blue); box-shadow: 0 0 0 1px var(--blue); }
+    .user-search-icon {
+      position: absolute; left: 9px; top: 50%; transform: translateY(-50%);
+      color: var(--muted); pointer-events: none; font-size: 14px;
+    }
+    .user-list { list-style: none; max-height: 320px; overflow-y: auto; border: 1px solid var(--border); border-radius: 4px; background: var(--white); }
+    .user-list li {
+      padding: 7px 10px; cursor: pointer; border-bottom: 1px solid var(--border-light);
+      font-size: 13px; transition: background 0.1s;
+    }
+    .user-list li:last-child { border-bottom: none; }
+    .user-list li:hover, .user-list li.selected { background: #EFF6FC; }
+    .user-list li .u-name { font-weight: 500; }
+    .user-list li .u-sub { font-size: 11px; color: var(--muted); }
+    .list-empty { padding: 12px; font-size: 13px; color: var(--muted); text-align: center; }
+
+    /* Tiles */
+    .tile-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 12px; margin-bottom: 20px; }
+    .tile {
+      background: var(--white); border: 1px solid var(--border); border-radius: var(--radius);
+      padding: 16px 14px; cursor: pointer; transition: box-shadow 0.15s, border-color 0.15s;
+      display: flex; flex-direction: column; gap: 4px;
+    }
+    .tile:hover { box-shadow: var(--shadow); border-color: #C8C6C4; }
+    .tile.active { border-color: var(--blue); background: #EFF6FC; }
+    .tile-label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; }
+    .tile-value { font-size: 24px; font-weight: 600; line-height: 1.2; }
+    .tile-sub { font-size: 11px; color: var(--muted); }
+    .tile-flag { display: flex; align-items: center; gap: 4px; font-size: 11px; margin-top: 2px; }
+
+    /* Section detail */
+    .section-header { display: flex; align-items: center; gap: 8px; margin-bottom: 14px; }
+    .section-header button {
+      background: none; border: none; color: var(--blue); cursor: pointer; font-size: 13px; padding: 0;
+    }
+    .section-header button:hover { text-decoration: underline; }
+    .back-btn {
+      display: inline-flex; align-items: center; gap: 5px;
+      background: none; border: 1px solid var(--border); border-radius: 4px;
+      padding: 4px 10px; font-size: 13px; cursor: pointer; color: var(--text); margin-bottom: 14px;
+    }
+    .back-btn:hover { background: var(--bg); }
+
+    /* Profile card */
+    .profile-card {
+      background: var(--white); border: 1px solid var(--border); border-radius: var(--radius);
+      padding: 18px; margin-bottom: 20px; display: grid; grid-template-columns: 1fr 1fr; gap: 12px;
+    }
+    .profile-field { display: flex; flex-direction: column; gap: 2px; }
+    .profile-field .pf-label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.4px; }
+    .profile-field .pf-value { font-size: 13px; font-weight: 500; }
+
+    /* Table */
+    .data-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    .data-table th { background: var(--bg); text-align: left; padding: 8px 12px; font-weight: 600; border-bottom: 2px solid var(--border); font-size: 12px; }
+    .data-table td { padding: 8px 12px; border-bottom: 1px solid var(--border); vertical-align: top; }
+    .data-table tr:last-child td { border-bottom: none; }
+    .data-table tr:hover td { background: #FAFAFA; }
+    .table-wrap { background: var(--white); border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; margin-bottom: 20px; overflow-x: auto; }
+
+    /* Badges */
+    .badge {
+      display: inline-flex; align-items: center; gap: 3px;
+      padding: 1px 6px; border-radius: 10px; font-size: 11px; font-weight: 500; white-space: nowrap;
+    }
+    .badge-warn { background: #FFF4CE; color: #8A5E00; }
+    .badge-danger { background: #FDE7E9; color: var(--red); }
+    .badge-info { background: #EFF6FC; color: #004578; }
+    .badge-ok { background: #E8F5E9; color: var(--green); }
+
+    /* Risk badge */
+    .risk-badge {
+      display: inline-flex; align-items: center; gap: 6px;
+      padding: 6px 14px; border-radius: 20px; font-size: 14px; font-weight: 700;
+    }
+
+    /* Section filter row */
+    .filter-row { display: flex; gap: 8px; margin-bottom: 12px; flex-wrap: wrap; }
+    .filter-row input, .filter-row select {
+      padding: 5px 10px; border: 1px solid #C8C6C4; border-radius: 4px; font-size: 13px; outline: none;
+    }
+    .filter-row input:focus, .filter-row select:focus { border-color: var(--blue); }
+
+    /* POA bar */
+    .poa-bar-wrap { background: #E1DFDD; border-radius: 4px; height: 8px; margin: 6px 0; overflow: hidden; }
+    .poa-bar { height: 100%; border-radius: 4px; transition: width 0.5s; }
+
+    /* Copy panel */
+    .copy-panel {
+      background: var(--white); border: 1px solid var(--border); border-radius: var(--radius);
+      padding: 16px; margin-bottom: 20px;
+    }
+    .copy-panel textarea {
+      width: 100%; height: 160px; border: 1px solid var(--border); border-radius: 4px;
+      padding: 8px; font-size: 12px; font-family: 'Consolas', monospace; resize: vertical;
+      outline: none; background: #FAFAFA;
+    }
+    .copy-actions { display: flex; gap: 8px; margin-top: 8px; }
+    .btn-sec {
+      padding: 5px 12px; border: 1px solid var(--border); border-radius: 4px;
+      background: var(--white); font-size: 12px; cursor: pointer;
+    }
+    .btn-sec:hover { background: var(--bg); }
+
+    /* Misc */
+    .empty-state { text-align: center; padding: 40px 20px; color: var(--muted); }
+    .info-box {
+      background: #EFF6FC; border-left: 3px solid var(--blue); border-radius: 4px;
+      padding: 10px 14px; font-size: 13px; margin-bottom: 16px;
+    }
+    .warn-box {
+      background: #FFF4CE; border-left: 3px solid var(--yellow); border-radius: 4px;
+      padding: 10px 14px; font-size: 13px; margin-bottom: 16px;
+    }
+    .no-user-msg { display: flex; flex-direction: column; align-items: center; gap: 12px; padding: 60px 20px; color: var(--muted); }
+    .no-user-msg svg { opacity: 0.3; }
+    .section-wrap { display: none; }
+    .section-wrap.visible { display: block; }
+
+    /* Org tiles grid header */
+    .section-title { font-size: 15px; font-weight: 600; margin-bottom: 14px; }
+  </style>
+</head>
+<body>
+
+<!-- ─────────── SETUP SCREEN ─────────── -->
+<div id="screen-setup">
+  <div class="setup-card">
+    <div class="setup-logo">
+      <svg width="32" height="32" viewBox="0 0 32 32" fill="none">
+        <circle cx="16" cy="16" r="16" fill="#0078D4"/>
+        <path d="M16 8a5 5 0 100 10A5 5 0 0016 8zm-9 16c0-4.97 4.03-9 9-9s9 4.03 9 9" stroke="#fff" stroke-width="2" stroke-linecap="round"/>
+      </svg>
+      <h1>D365 Security Review</h1>
+    </div>
+    <p class="setup-sub">Enter your Dynamics 365 environment URL and sign in with a System Administrator account. You will be prompted to consent on first use.</p>
+
+    <div class="field">
+      <label for="inp-orgUrl">D365 Environment URL</label>
+      <input id="inp-orgUrl" type="url" placeholder="https://yourorg.crm.dynamics.com" autocomplete="off" />
+      <div class="hint">The base URL of your Dataverse / D365 environment (no trailing slash)</div>
+    </div>
+
+    <div id="setup-error" class="setup-error"></div>
+
+    <button id="btn-connect" class="btn-primary">🔐 Sign In with Microsoft</button>
+  </div>
+</div>
+
+<!-- ─────────── LOADING SCREEN ─────────── -->
+<div id="screen-loading">
+  <div class="spinner"></div>
+  <div id="loading-msg" style="color:var(--muted);font-size:14px;">Signing in…</div>
+</div>
+
+<!-- ─────────── DASHBOARD ─────────── -->
+<div id="screen-dashboard">
+
+  <div class="topbar">
+    <div class="topbar-logo">
+      <svg width="20" height="20" viewBox="0 0 32 32" fill="none">
+        <circle cx="16" cy="16" r="16" fill="#0078D4"/>
+        <path d="M16 8a5 5 0 100 10A5 5 0 0016 8zm-9 16c0-4.97 4.03-9 9-9s9 4.03 9 9" stroke="#fff" stroke-width="2" stroke-linecap="round"/>
+      </svg>
+      D365 Security Review
+    </div>
+    <div class="topbar-env" id="topbar-env"></div>
+    <button class="topbar-btn" id="btn-copy-review" style="display:none">📋 Copy Review</button>
+    <button class="topbar-btn" id="btn-signout">Sign out</button>
+  </div>
+
+  <div class="dashboard-body">
+
+    <!-- Sidebar: user picker -->
+    <div class="sidebar">
+      <h3 style="margin-bottom:4px;">Select User</h3>
+      <div class="user-search-wrap">
+        <span class="user-search-icon">🔍</span>
+        <input id="user-search" type="text" placeholder="Search by name…" autocomplete="off" />
+      </div>
+      <div id="user-list-wrap">
+        <div class="list-empty">Loading users…</div>
+      </div>
+    </div>
+
+    <!-- Main pane -->
+    <div class="main-pane" id="main-pane">
+
+      <!-- No user selected -->
+      <div id="pane-no-user">
+        <div class="section-title">Organisation Overview</div>
+        <div id="org-tiles" class="tile-grid"></div>
+        <div class="no-user-msg">
+          <svg width="48" height="48" fill="none" viewBox="0 0 48 48"><circle cx="24" cy="16" r="9" stroke="#888" stroke-width="2"/><path d="M6 42c0-9.94 8.06-18 18-18s18 8.06 18 18" stroke="#888" stroke-width="2" stroke-linecap="round"/></svg>
+          <span>Select a user from the sidebar to begin the security review.</span>
+        </div>
+      </div>
+
+      <!-- User tiles overview -->
+      <div id="pane-user-tiles" style="display:none">
+        <button class="back-btn" id="btn-back-to-org">← Back to Org Overview</button>
+        <div id="user-profile-card" class="profile-card"></div>
+        <div id="risk-row" style="margin-bottom:20px;display:flex;align-items:center;gap:12px;"></div>
+        <div class="section-title">Security Tiles — click to drill in</div>
+        <div id="user-tiles" class="tile-grid"></div>
+      </div>
+
+      <!-- Detail sections (one visible at a time) -->
+      <div id="pane-detail" style="display:none">
+        <button class="back-btn" id="btn-back-to-user">← Back to User Overview</button>
+        <div id="section-direct-roles" class="section-wrap"></div>
+        <div id="section-teams" class="section-wrap"></div>
+        <div id="section-profiles" class="section-wrap"></div>
+        <div id="section-poa" class="section-wrap"></div>
+        <div id="section-copy" class="section-wrap"></div>
+      </div>
+
+    </div><!-- /main-pane -->
+  </div><!-- /dashboard-body -->
+</div><!-- /screen-dashboard -->
+
+<script>
+/* ================================================================
+   HELPERS
+   ================================================================ */
+function esc(s) {
+  if (s == null) return '';
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+function fmtNum(n) { return n == null ? '—' : Number(n).toLocaleString(); }
+function formatDate(d) {
+  if (!d) return '—';
+  try { return new Date(d).toLocaleDateString(undefined, {year:'numeric',month:'short',day:'numeric'}); }
+  catch { return d; }
+}
+
+/* ================================================================
+   STATE
+   ================================================================ */
+const S = {
+  orgUrl: '',
+  clientId: '',
+  msal: null,
+  account: null,
+  // org
+  orgStats: null,
+  orgLoading: false,
+  // users
+  users: [],
+  searchText: '',
+  searchLoading: false,
+  fetchError: null,
+  searchTimer: null,
+  // selected
+  selectedUserId: null,
+  selectedUser: null,
+  loadingUser: false,
+  directRoles: [],
+  teams: [],
+  teamRoles: [],
+  fieldProfiles: [],
+  poaCount: null,
+  accessTeamPOACount: null,
+  ownerTeamPOACount: null,
+  loadingPOA: false,
+  mailboxStatus: '',
+  userPosition: null,
+  positionChildCount: null,
+  positionUserCount: null,
+  // flags
+  crossBUFlag: false,
+  highPrivilegeFlag: false,
+  tooManyRolesFlag: false,
+  tooManyProfilesFlag: false,
+  duplicateRolesFlag: false,
+  hasAdminRoleFlag: false,
+  orgDepthFlag: false,
+  // nav
+  activeSection: null, // 'roles'|'teams'|'profiles'|'poa'|'copy'
+};
+
+/* ================================================================
+   RISK
+   ================================================================ */
+function calculateRisk() {
+  const flagCount = [S.crossBUFlag,S.highPrivilegeFlag,S.tooManyRolesFlag,
+    S.tooManyProfilesFlag,S.duplicateRolesFlag,S.orgDepthFlag].filter(Boolean).length;
+  const poa = S.poaCount || 0;
+  if (poa > 50000 || (S.hasAdminRoleFlag && flagCount >= 2)) return 'Critical';
+  if (poa > 10000 || S.hasAdminRoleFlag || flagCount >= 3) return 'High';
+  if (flagCount >= 1 || poa > 1000) return 'Medium';
+  return 'Low';
+}
+function riskColor(r) {
+  return {Critical:'#D13438',High:'#FF8C00',Medium:'#FFB900',Low:'#107C10'}[r] || '#888';
+}
+function poaColor(n) {
+  if (n <= 1000) return '#107C10';
+  if (n <= 10000) return '#FFB900';
+  if (n <= 50000) return '#FF8C00';
+  return '#D13438';
+}
+function poaRec(n) {
+  if (n <= 1000) return 'Healthy — no action needed.';
+  if (n <= 10000) return 'Monitor POA count and review access.';
+  if (n <= 50000) return 'Review POA count and reduce sharing if possible.';
+  return 'Critical risk — reduce POA sharing immediately.';
+}
+
+/* ================================================================
+   MSAL / AUTH
+   ================================================================ */
+function initMsal() {
+  const cfg = {
+    auth: {
+      clientId: APP_CLIENT_ID,
+      authority: 'https://login.microsoftonline.com/common',
+      redirectUri: window.location.href.split('?')[0].split('#')[0],
+      navigateToLoginRequestUrl: false,
+    },
+    cache: { cacheLocation: 'localStorage', storeAuthStateInCookie: false },
+  };
+  S.msal = new msal.PublicClientApplication(cfg);
+}
+
+async function signIn() {
+  const orgOrigin = new URL(S.orgUrl).origin;
+  const scopes = [`${orgOrigin}/user_impersonation`];
+
+  // 1. Try silent SSO first — reuses existing AAD browser session (no popup)
+  try {
+    const hints = S.msal.getAllAccounts();
+    const loginHint = hints.length ? hints[0].username : undefined;
+    const r = await S.msal.ssoSilent({ scopes, loginHint });
+    S.account = r.account;
+    return r.accessToken;
+  } catch {}
+
+  // 2. Fall back to popup only if silent SSO fails (first use / consent needed)
+  const result = await S.msal.loginPopup({ scopes });
+  S.account = result.account;
+  return result.accessToken;
+}
+
+async function getToken() {
+  if (!S.msal || !S.account) throw new Error('Not authenticated');
+  const orgOrigin = new URL(S.orgUrl).origin;
+  try {
+    const r = await S.msal.acquireTokenSilent({ scopes: [`${orgOrigin}/user_impersonation`], account: S.account });
+    return r.accessToken;
+  } catch {
+    const r = await S.msal.acquireTokenPopup({ scopes: [`${orgOrigin}/user_impersonation`], account: S.account });
+    return r.accessToken;
+  }
+}
+
+/* ================================================================
+   DATAVERSE API
+   ================================================================ */
+async function dvFetch(path) {
+  const token = await getToken();
+  const res = await fetch(`${S.orgUrl}/api/data/v9.2/${path}`, {
+    headers: {
+      'OData-MaxVersion': '4.0', 'OData-Version': '4.0', 'Accept': 'application/json',
+      'Authorization': `Bearer ${token}`,
+      'Prefer': 'odata.include-annotations="OData.Community.Display.V1.FormattedValue"',
+    },
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status}: ${(await res.text()).slice(0,300)}`);
+  return res.json();
+}
+
+async function dvCount(entitySet, pk, filter) {
+  const token = await getToken();
+  let url = `${S.orgUrl}/api/data/v9.2/${entitySet}?$count=true&$select=${pk}&$top=1`;
+  if (filter) url += `&$filter=${encodeURIComponent(filter)}`;
+  try {
+    const res = await fetch(url, { headers: { 'OData-MaxVersion':'4.0','OData-Version':'4.0','Accept':'application/json','Authorization':`Bearer ${token}` } });
+    if (!res.ok) return null;
+    const data = await res.json();
+    return typeof data['@odata.count'] === 'number' ? data['@odata.count'] : null;
+  } catch { return null; }
+}
+
+/* ================================================================
+   DATA — ORG STATS
+   ================================================================ */
+async function fetchOrgStats() {
+  S.orgLoading = true;
+  renderOrgTiles();
+
+  const snapshotEntities = ['systemuser','role','team','fieldsecurityprofile','businessunit'];
+  const snap = {};
+  try {
+    const token = await getToken();
+    const encoded = JSON.stringify(snapshotEntities);
+    const res = await fetch(`${S.orgUrl}/api/data/v9.2/RetrieveTotalRecordCount(EntityNames=@p1)?@p1=${encoded}`, {
+      headers:{'OData-MaxVersion':'4.0','OData-Version':'4.0','Accept':'application/json','Authorization':`Bearer ${token}`}
+    });
+    if (res.ok) {
+      const d = await res.json();
+      const col = d.EntityRecordCountCollection;
+      col.Keys.forEach((k, i) => snap[k] = col.Values[i]);
+    }
+  } catch {}
+
+  const [activeUsers, ownerTeams, accessTeams, sysAdmins] = await Promise.all([
+    dvCount('systemusers','systemuserid','isdisabled eq false and accessmode ne 4'),
+    dvCount('teams','teamid','teamtype eq 0'),
+    dvCount('teams','teamid','teamtype eq 1'),
+    dvCount('systemusers','systemuserid',"isdisabled eq false and systemuserroles_association/any(r:r/name eq 'System Administrator')"),
+  ]);
+
+  let hierarchyEnabled=null, hierarchyModel=null, hierarchyDepth=null, hierarchyFetchError=false, hierarchyFetchErrorDetails=null;
+  try {
+    const token = await getToken();
+    const r = await fetch(`${S.orgUrl}/api/data/v9.2/organizations?$select=usepositionhierarchy,maxdepthforhierarchicalsecuritymodel`, {
+      headers:{'OData-MaxVersion':'4.0','OData-Version':'4.0','Accept':'application/json','Authorization':`Bearer ${token}`}
+    });
+    if (r.ok) {
+      const d = await r.json();
+      const org = (d.value||[])[0];
+      if (org) {
+        hierarchyEnabled = org.usepositionhierarchy === true || org.usepositionhierarchy === 1;
+        hierarchyModel = hierarchyEnabled ? 2 : 0;
+        hierarchyDepth = typeof org.maxdepthforhierarchicalsecuritymodel === 'number' ? org.maxdepthforhierarchicalsecuritymodel : null;
+      } else { hierarchyFetchError=true; hierarchyFetchErrorDetails='Empty response'; }
+    } else { hierarchyFetchError=true; hierarchyFetchErrorDetails=`HTTP ${r.status}`; }
+  } catch(e) { hierarchyFetchError=true; hierarchyFetchErrorDetails=e?.message; }
+
+  const [totalPositions, usersWithPosition] = await Promise.all([
+    dvCount('positions','positionid'),
+    dvCount('systemusers','systemuserid','isdisabled eq false and _positionid_value ne null'),
+  ]);
+
+  S.orgStats = {
+    activeUsers, ownerTeams, accessTeams, sysAdmins,
+    totalRoles: snap['role'] ?? null,
+    totalTeams: snap['team'] ?? null,
+    totalProfiles: snap['fieldsecurityprofile'] ?? null,
+    totalBUs: snap['businessunit'] ?? null,
+    hierarchyEnabled, hierarchyModel, hierarchyFetchError, hierarchyFetchErrorDetails,
+    hierarchyDepth, totalPositions, usersWithPosition,
+  };
+  S.orgLoading = false;
+  renderOrgTiles();
+}
+
+/* ================================================================
+   DATA — USER SEARCH
+   ================================================================ */
+async function searchUsers(term) {
+  S.searchLoading = true;
+  S.fetchError = null;
+  renderUserList();
+  try {
+    const filter = term.trim()
+      ? `contains(fullname,'${term.trim().replace(/'/g,"''")}') and isdisabled eq false`
+      : 'isdisabled eq false';
+    const data = await dvFetch(
+      `systemusers?$select=systemuserid,fullname,internalemailaddress,jobtitle,_businessunitid_value,accessmode,isdisabled,islicensed` +
+      `&$filter=${encodeURIComponent(filter)}&$orderby=fullname asc&$top=50`
+    );
+    S.users = data.value || [];
+  } catch(e) {
+    S.fetchError = e?.message || String(e);
+    S.users = [];
+  }
+  S.searchLoading = false;
+  renderUserList();
+}
+
+/* ================================================================
+   DATA — USER DETAILS
+   ================================================================ */
+async function fetchUserDetails(userId) {
+  S.loadingUser = true;
+  S.selectedUserId = userId;
+  S.selectedUser = S.users.find(u => u.systemuserid === userId) || null;
+  S.directRoles = []; S.teams = []; S.teamRoles = []; S.fieldProfiles = [];
+  S.poaCount = null; S.accessTeamPOACount = null; S.ownerTeamPOACount = null;
+  S.mailboxStatus = ''; S.userPosition = null; S.positionChildCount = null; S.positionUserCount = null;
+  S.activeSection = null;
+  showPane('user-tiles');
+  renderUserTiles();
+
+  const [roleData, teamData, profileData] = await Promise.all([
+    dvFetch(`systemusers(${userId})/systemuserroles_association?$select=roleid,name,_businessunitid_value`),
+    dvFetch(`systemusers(${userId})/teammembership_association?$select=teamid,name,teamtype,_businessunitid_value`),
+    dvFetch(`systemusers(${userId})/systemuserprofiles_association?$select=fieldsecurityprofileid,name`),
+  ]);
+  S.directRoles = roleData.value || [];
+  S.teams = teamData.value || [];
+  S.fieldProfiles = profileData.value || [];
+
+  // team roles (parallel)
+  const teamRoleResults = await Promise.all(
+    S.teams.map(t => dvFetch(`teams(${t.teamid})/teamroles_association?$select=roleid,name`).then(d => (d.value||[]).map(r=>({...r,inheritedFrom:t.name}))).catch(()=>[]))
+  );
+  S.teamRoles = teamRoleResults.flat();
+
+  // Mailbox
+  try {
+    const mb = await dvFetch(`mailboxes?$select=statuscode&$filter=_regardingobjectid_value eq ${userId}&$top=1`);
+    const m = (mb.value||[])[0];
+    S.mailboxStatus = m ? (m.statuscode===1?'Healthy':'Warning') : 'Not configured';
+  } catch { S.mailboxStatus = 'Unknown'; }
+
+  // Risk flags (computed before POA)
+  const userBU = S.selectedUser?.['_businessunitid_value'];
+  S.crossBUFlag = S.directRoles.some(r => r['_businessunitid_value'] && r['_businessunitid_value'] !== userBU);
+  S.highPrivilegeFlag = S.directRoles.some(r => r.name.includes('System Administrator') || r.name.includes('System Customizer'));
+  S.tooManyRolesFlag = S.directRoles.length > 5;
+  S.tooManyProfilesFlag = S.fieldProfiles.length > 3;
+  S.duplicateRolesFlag = S.teamRoles.some(tr => S.directRoles.some(dr => dr.name === tr.name));
+  S.hasAdminRoleFlag = S.directRoles.some(r => r.name.includes('System Administrator'));
+  S.orgDepthFlag = false; // requires privilege depth endpoint not available without plugins
+
+  S.loadingUser = false;
+  renderUserTiles();
+  renderUserProfileCard();
+
+  // POA (async, renders when ready)
+  S.loadingPOA = true;
+  renderUserTiles();
+  try {
+    const poaResp = await dvFetch(`principalobjectaccessset?$count=true&$select=principalobjectaccessid&$top=1&$filter=principalid eq ${userId}`);
+    S.poaCount = typeof poaResp['@odata.count']==='number' ? poaResp['@odata.count'] : 0;
+  } catch { S.poaCount = 0; }
+
+  const fetchTeamPOA = async (ids) => {
+    if (!ids.length) return 0;
+    let total = 0;
+    for (let i=0; i<ids.length; i+=50) {
+      const chunk = ids.slice(i,i+50);
+      try {
+        const f = chunk.map(id=>`principalid eq ${id}`).join(' or ');
+        const r = await dvFetch(`principalobjectaccessset?$count=true&$select=principalobjectaccessid&$top=1&$filter=${encodeURIComponent(f)}`);
+        total += typeof r['@odata.count']==='number' ? r['@odata.count'] : 0;
+      } catch {}
+    }
+    return total;
+  };
+  const [atPOA, otPOA] = await Promise.all([
+    fetchTeamPOA(S.teams.filter(t=>t.teamtype===1).map(t=>t.teamid)),
+    fetchTeamPOA(S.teams.filter(t=>t.teamtype===0).map(t=>t.teamid)),
+  ]);
+  S.accessTeamPOACount = atPOA;
+  S.ownerTeamPOACount = otPOA;
+  S.loadingPOA = false;
+  renderUserTiles();
+
+  // Position
+  try {
+    const uPos = await dvFetch(`systemusers(${userId})?$select=_positionid_value`);
+    const posId = uPos['_positionid_value'];
+    if (posId) {
+      const posName = uPos['_positionid_value@OData.Community.Display.V1.FormattedValue'] || posId;
+      let parentName = null;
+      try {
+        const pd = await dvFetch(`positions(${posId})?$select=name&$expand=parentpositionid($select=name)`);
+        parentName = pd?.parentpositionid?.name || null;
+      } catch {}
+      S.userPosition = { id: posId, name: posName, parentName };
+      const [cc, uc] = await Promise.all([
+        dvCount('positions','positionid',`_parentpositionid_value eq ${posId}`),
+        dvCount('systemusers','systemuserid',`isdisabled eq false and _positionid_value eq ${posId}`),
+      ]);
+      S.positionChildCount = cc;
+      S.positionUserCount = uc;
+    }
+  } catch {}
+  renderUserTiles();
+}
+
+/* ================================================================
+   RENDERING — PANE SWITCHER
+   ================================================================ */
+function showPane(id) {
+  document.getElementById('pane-no-user').style.display = 'none';
+  document.getElementById('pane-user-tiles').style.display = 'none';
+  document.getElementById('pane-detail').style.display = 'none';
+  const el = document.getElementById(`pane-${id}`);
+  if (el) el.style.display = 'block';
+}
+
+function showSection(id) {
+  document.querySelectorAll('#pane-detail .section-wrap').forEach(s=>s.classList.remove('visible'));
+  const el = document.getElementById(`section-${id}`);
+  if (el) el.classList.add('visible');
+  showPane('detail');
+}
+
+/* ================================================================
+   RENDERING — ORG TILES
+   ================================================================ */
+function renderOrgTiles() {
+  const el = document.getElementById('org-tiles');
+  if (!el) return;
+  if (S.orgLoading || !S.orgStats) {
+    el.innerHTML = '<div style="color:var(--muted);font-size:13px;">Loading org overview…</div>';
+    return;
+  }
+  const o = S.orgStats;
+  const hierarchyLabel = o.hierarchyFetchError
+    ? '⚠ No access'
+    : o.hierarchyEnabled == null ? '—'
+    : o.hierarchyEnabled ? `Position (depth ${o.hierarchyDepth ?? '?'})` : 'Disabled';
+
+  el.innerHTML = tile('Active Users', fmtNum(o.activeUsers), 'isdisabled eq false, accessmode ≠ 4')
+    + tile('Security Roles', fmtNum(o.totalRoles), '24h snapshot')
+    + tile('Owner Teams', fmtNum(o.ownerTeams), 'teamtype = 0')
+    + tile('Access Teams', fmtNum(o.accessTeams), 'teamtype = 1')
+    + tile('Field Sec. Profiles', fmtNum(o.totalProfiles), '24h snapshot')
+    + tile('Business Units', fmtNum(o.totalBUs), '24h snapshot')
+    + tile('Sys Admins', fmtNum(o.sysAdmins), 'active users')
+    + tile('Hierarchy Security', hierarchyLabel, o.hierarchyEnabled ? `${fmtNum(o.totalPositions)} positions · ${fmtNum(o.usersWithPosition)} users assigned` : '')
+    ;
+}
+
+function tile(label, value, sub) {
+  return `<div class="tile" style="cursor:default">
+    <div class="tile-label">${esc(label)}</div>
+    <div class="tile-value">${esc(value)}</div>
+    ${sub ? `<div class="tile-sub">${esc(sub)}</div>` : ''}
+  </div>`;
+}
+
+/* ================================================================
+   RENDERING — USER LIST
+   ================================================================ */
+function renderUserList() {
+  const wrap = document.getElementById('user-list-wrap');
+  if (!wrap) return;
+  if (S.searchLoading) { wrap.innerHTML = '<div class="list-empty">Searching…</div>'; return; }
+  if (S.fetchError) { wrap.innerHTML = `<div class="list-empty" style="color:var(--red)">Error: ${esc(S.fetchError)}</div>`; return; }
+  if (!S.users.length) { wrap.innerHTML = '<div class="list-empty">No users found.</div>'; return; }
+  wrap.innerHTML = `<ul class="user-list">${S.users.map(u=>`
+    <li data-uid="${esc(u.systemuserid)}" class="${u.systemuserid===S.selectedUserId?'selected':''}">
+      <div class="u-name">${esc(u.fullname)}</div>
+      <div class="u-sub">${esc(u.jobtitle||u.internalemailaddress||'')}</div>
+    </li>`).join('')}</ul>`;
+  wrap.querySelectorAll('.user-list li').forEach(li => {
+    li.addEventListener('click', () => { fetchUserDetails(li.dataset.uid); });
+  });
+}
+
+/* ================================================================
+   RENDERING — USER PROFILE CARD
+   ================================================================ */
+function renderUserProfileCard() {
+  const el = document.getElementById('user-profile-card');
+  if (!el || !S.selectedUser) return;
+  const u = S.selectedUser;
+  const accessMap = {0:'Read-Write',1:'Admin',2:'Non-Interactive',3:'Delegated',4:'Support',5:'Selective'};
+  el.innerHTML = `
+    <div class="profile-field"><div class="pf-label">Full Name</div><div class="pf-value">${esc(u.fullname)}</div></div>
+    <div class="profile-field"><div class="pf-label">Email</div><div class="pf-value">${esc(u.internalemailaddress||'—')}</div></div>
+    <div class="profile-field"><div class="pf-label">Job Title</div><div class="pf-value">${esc(u.jobtitle||'—')}</div></div>
+    <div class="profile-field"><div class="pf-label">Business Unit</div><div class="pf-value">${esc(u['_businessunitid_value@OData.Community.Display.V1.FormattedValue']||u['_businessunitid_value']||'—')}</div></div>
+    <div class="profile-field"><div class="pf-label">Access Mode</div><div class="pf-value">${esc(accessMap[u.accessmode]||u.accessmode)}</div></div>
+    <div class="profile-field"><div class="pf-label">Mailbox Status</div><div class="pf-value">${esc(S.mailboxStatus||'…')}</div></div>
+  `;
+}
+
+/* ================================================================
+   RENDERING — USER TILES
+   ================================================================ */
+function renderUserTiles() {
+  renderUserProfileCard();
+  const tileEl = document.getElementById('user-tiles');
+  const riskEl = document.getElementById('risk-row');
+  const copyBtn = document.getElementById('btn-copy-review');
+  if (!tileEl) return;
+
+  if (S.loadingUser) {
+    tileEl.innerHTML = '<div style="color:var(--muted);font-size:13px;">Loading user data…</div>';
+    if (riskEl) riskEl.innerHTML = '';
+    return;
+  }
+
+  const risk = calculateRisk();
+  const rc = riskColor(risk);
+  if (riskEl) {
+    riskEl.innerHTML = `
+      <div class="risk-badge" style="background:${rc}22;color:${rc};border:1px solid ${rc}44">
+        ${risk === 'Critical' ? '🔴' : risk === 'High' ? '🟠' : risk === 'Medium' ? '🟡' : '🟢'} Risk: ${esc(risk)}
+      </div>
+      <div style="font-size:12px;color:var(--muted);">${esc(S.selectedUser?.fullname||'')}</div>
+    `;
+  }
+  if (copyBtn) copyBtn.style.display = 'inline-block';
+
+  const poaVal = S.loadingPOA ? '…' : fmtNum(S.poaCount);
+  const poaCol = S.loadingPOA ? '#888' : poaColor(S.poaCount||0);
+
+  const flags = (label, val) => val ? `<div class="tile-flag"><span style="color:var(--red)">⚠</span> ${label}</div>` : '';
+
+  tileEl.innerHTML = `
+    <div class="tile ${S.activeSection==='roles'?'active':''}" data-section="roles">
+      <div class="tile-label">Direct Roles</div>
+      <div class="tile-value">${S.directRoles.length}</div>
+      ${flags('Too many (>5)', S.tooManyRolesFlag)}
+      ${flags('Cross-BU', S.crossBUFlag)}
+      ${flags('High privilege', S.highPrivilegeFlag)}
+    </div>
+    <div class="tile ${S.activeSection==='teams'?'active':''}" data-section="teams">
+      <div class="tile-label">Team Memberships</div>
+      <div class="tile-value">${S.teams.length}</div>
+      <div class="tile-sub">${S.teamRoles.length} inherited roles</div>
+      ${flags('Duplicate roles', S.duplicateRolesFlag)}
+    </div>
+    <div class="tile ${S.activeSection==='profiles'?'active':''}" data-section="profiles">
+      <div class="tile-label">Field Sec. Profiles</div>
+      <div class="tile-value">${S.fieldProfiles.length}</div>
+      ${flags('Too many (>3)', S.tooManyProfilesFlag)}
+    </div>
+    <div class="tile ${S.activeSection==='poa'?'active':''}" data-section="poa">
+      <div class="tile-label">POA Records</div>
+      <div class="tile-value" style="color:${poaCol}">${poaVal}</div>
+      <div class="tile-sub">Access team: ${S.loadingPOA?'…':fmtNum(S.accessTeamPOACount)}</div>
+    </div>
+    <div class="tile" data-section="copy">
+      <div class="tile-label">Review Summary</div>
+      <div class="tile-value" style="font-size:18px;">📋</div>
+      <div class="tile-sub">Copy / download</div>
+    </div>
+  `;
+  tileEl.querySelectorAll('.tile[data-section]').forEach(t => {
+    t.addEventListener('click', () => { S.activeSection = t.dataset.section; renderSection(t.dataset.section); });
+  });
+}
+
+/* ================================================================
+   RENDERING — SECTIONS
+   ================================================================ */
+function renderSection(name) {
+  switch(name) {
+    case 'roles':     renderSectionRoles(); break;
+    case 'teams':     renderSectionTeams(); break;
+    case 'profiles':  renderSectionProfiles(); break;
+    case 'poa':       renderSectionPOA(); break;
+    case 'copy':      renderSectionCopy(); break;
+  }
+  showSection(name);
+}
+
+function renderSectionRoles() {
+  const el = document.getElementById('section-direct-roles');
+  if (!el) return;
+  const userBU = S.selectedUser?.['_businessunitid_value'];
+  const rows = S.directRoles.map(r => {
+    const buName = r['_businessunitid_value@OData.Community.Display.V1.FormattedValue'] || r['_businessunitid_value'] || '—';
+    const crossBU = r['_businessunitid_value'] && r['_businessunitid_value'] !== userBU;
+    const hp = r.name.includes('System Administrator') || r.name.includes('System Customizer');
+    const dup = S.teamRoles.some(tr => tr.name === r.name);
+    return `<tr>
+      <td>${esc(r.name)}</td>
+      <td>${esc(buName)}</td>
+      <td>${crossBU?'<span class="badge badge-warn">⚠ Cross-BU</span>':''}</td>
+      <td>${hp?'<span class="badge badge-danger">High privilege</span>':''}</td>
+      <td>${dup?'<span class="badge badge-warn">Duplicate</span>':''}</td>
+    </tr>`;
+  }).join('') || '<tr><td colspan="5" style="text-align:center;color:var(--muted)">No direct roles</td></tr>';
+
+  el.innerHTML = `
+    <h2 style="margin-bottom:14px;">Direct Security Roles (${S.directRoles.length})</h2>
+    ${S.tooManyRolesFlag?'<div class="warn-box">⚠ More than 5 direct roles assigned — review and reduce.</div>':''}
+    <div class="table-wrap">
+      <table class="data-table">
+        <thead><tr><th>Role Name</th><th>Role BU</th><th>Cross-BU</th><th>Privilege</th><th>Duplicate</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>
+    <h2 style="margin:20px 0 14px;">Roles via Teams (${S.teamRoles.length})</h2>
+    <div class="table-wrap">
+      <table class="data-table">
+        <thead><tr><th>Role Name</th><th>Inherited from</th></tr></thead>
+        <tbody>${S.teamRoles.map(r=>`<tr><td>${esc(r.name)}</td><td>${esc(r.inheritedFrom)}</td></tr>`).join('')||'<tr><td colspan="2" style="text-align:center;color:var(--muted)">None</td></tr>'}</tbody>
+      </table>
+    </div>
+  `;
+}
+
+function renderSectionTeams() {
+  const el = document.getElementById('section-teams');
+  if (!el) return;
+  const typeMap = {0:'Owner',1:'Access',2:'AAD Group (Owner)',3:'AAD Group (Access)'};
+  const rows = S.teams.map(t => {
+    const buName = t['_businessunitid_value@OData.Community.Display.V1.FormattedValue'] || t['_businessunitid_value'] || '—';
+    const isAccess = t.teamtype === 1;
+    return `<tr>
+      <td>${esc(t.name)}</td>
+      <td>${esc(typeMap[t.teamtype]||t.teamtype)}</td>
+      <td>${esc(buName)}</td>
+      <td>${isAccess?'<span class="badge badge-warn">POA risk</span>':''}</td>
+    </tr>`;
+  }).join('') || '<tr><td colspan="4" style="text-align:center;color:var(--muted)">No team memberships</td></tr>';
+  el.innerHTML = `
+    <h2 style="margin-bottom:14px;">Team Memberships (${S.teams.length})</h2>
+    ${S.teams.some(t=>t.teamtype===1)?'<div class="info-box">ℹ Access Team memberships can create POA (Principal Object Access) records which may affect performance.</div>':''}
+    <div class="table-wrap">
+      <table class="data-table">
+        <thead><tr><th>Team Name</th><th>Type</th><th>BU</th><th>Flags</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>
+  `;
+}
+
+function renderSectionProfiles() {
+  const el = document.getElementById('section-profiles');
+  if (!el) return;
+  const rows = S.fieldProfiles.map(p => `<tr><td>${esc(p.name)}</td><td>Direct</td></tr>`).join('')
+    || '<tr><td colspan="2" style="text-align:center;color:var(--muted)">No field security profiles</td></tr>';
+  el.innerHTML = `
+    <h2 style="margin-bottom:14px;">Field Security Profiles (${S.fieldProfiles.length})</h2>
+    ${S.tooManyProfilesFlag?'<div class="warn-box">⚠ More than 3 field security profiles assigned — review necessity.</div>':''}
+    <div class="table-wrap">
+      <table class="data-table">
+        <thead><tr><th>Profile Name</th><th>Assignment</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>
+  `;
+}
+
+function renderSectionPOA() {
+  const el = document.getElementById('section-poa');
+  if (!el) return;
+  const total = S.poaCount || 0;
+  const pct = Math.min(100, total / 500);
+  const col = poaColor(total);
+  el.innerHTML = `
+    <h2 style="margin-bottom:14px;">POA &amp; Sharing Risk</h2>
+    ${S.loadingPOA?'<div class="info-box">⏳ Still loading POA counts…</div>':''}
+    <div class="table-wrap" style="padding:16px">
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
+        <div>
+          <div style="font-size:11px;color:var(--muted);text-transform:uppercase;margin-bottom:4px">User POA records</div>
+          <div style="font-size:28px;font-weight:700;color:${col}">${fmtNum(total)}</div>
+          <div class="poa-bar-wrap"><div class="poa-bar" style="width:${pct}%;background:${col}"></div></div>
+          <div style="font-size:12px;color:${col};margin-top:4px">${poaRec(total)}</div>
+        </div>
+        <div>
+          <div style="font-size:11px;color:var(--muted);text-transform:uppercase;margin-bottom:4px">Team POA breakdown</div>
+          <div style="font-size:13px">Owner teams: <strong>${fmtNum(S.ownerTeamPOACount)}</strong></div>
+          <div style="font-size:13px">Access teams: <strong>${fmtNum(S.accessTeamPOACount)}</strong></div>
+          <div style="font-size:13px;margin-top:6px">Access team memberships: <strong>${S.teams.filter(t=>t.teamtype===1).length}</strong></div>
+        </div>
+      </div>
+    </div>
+    <div class="info-box" style="margin-top:0">
+      💡 POA thresholds: &lt;1 000 = Healthy · 1 000–10 000 = Monitor · 10 000–50 000 = Review · &gt;50 000 = Critical
+    </div>
+  `;
+}
+
+function renderSectionCopy() {
+  const el = document.getElementById('section-copy');
+  if (!el) return;
+  const u = S.selectedUser;
+  const risk = calculateRisk();
+  const lines = [
+    `=== D365 User Security Review ===`,
+    `Generated: ${new Date().toLocaleString()}`,
+    `Environment: ${S.orgUrl}`,
+    ``,
+    `USER: ${u?.fullname || S.selectedUserId}`,
+    `Email: ${u?.internalemailaddress || '—'}`,
+    `Job Title: ${u?.jobtitle || '—'}`,
+    `Business Unit: ${u?.['_businessunitid_value@OData.Community.Display.V1.FormattedValue'] || '—'}`,
+    ``,
+    `RISK RATING: ${risk}`,
+    ``,
+    `--- DIRECT SECURITY ROLES (${S.directRoles.length}) ---`,
+    ...S.directRoles.map(r => `  • ${r.name}${S.crossBUFlag&&r['_businessunitid_value']!==u?.['_businessunitid_value']?' [CROSS-BU]':''}`),
+    ``,
+    `--- TEAM MEMBERSHIPS (${S.teams.length}) ---`,
+    ...S.teams.map(t => `  • ${t.name} (${t.teamtype===1?'Access':'Owner'})`),
+    ``,
+    `--- TEAM-INHERITED ROLES (${S.teamRoles.length}) ---`,
+    ...S.teamRoles.map(r => `  • ${r.name} (via ${r.inheritedFrom})`),
+    ``,
+    `--- FIELD SECURITY PROFILES (${S.fieldProfiles.length}) ---`,
+    ...S.fieldProfiles.map(p => `  • ${p.name}`),
+    ``,
+    `--- POA & SHARING ---`,
+    `User POA records: ${S.poaCount != null ? S.poaCount : 'Loading…'}`,
+    `Owner team POA: ${S.ownerTeamPOACount != null ? S.ownerTeamPOACount : '—'}`,
+    `Access team POA: ${S.accessTeamPOACount != null ? S.accessTeamPOACount : '—'}`,
+    `Recommendation: ${poaRec(S.poaCount||0)}`,
+    ``,
+    `--- FLAGS ---`,
+    `Cross-BU role:      ${S.crossBUFlag}`,
+    `High privilege:     ${S.highPrivilegeFlag}`,
+    `Too many roles:     ${S.tooManyRolesFlag} (${S.directRoles.length} roles)`,
+    `Too many profiles:  ${S.tooManyProfilesFlag} (${S.fieldProfiles.length} profiles)`,
+    `Duplicate roles:    ${S.duplicateRolesFlag}`,
+    `Sys Admin:          ${S.hasAdminRoleFlag}`,
+    `Mailbox status:     ${S.mailboxStatus}`,
+    ``,
+    `=== END ===`,
+  ];
+  const text = lines.join('\n');
+  el.innerHTML = `
+    <h2 style="margin-bottom:14px;">Review Summary</h2>
+    <div class="copy-panel">
+      <textarea id="review-text" readonly>${esc(text)}</textarea>
+      <div class="copy-actions">
+        <button class="btn-sec" id="btn-do-copy">📋 Copy to clipboard</button>
+        <button class="btn-sec" id="btn-do-download">⬇ Download .txt</button>
+      </div>
+    </div>
+  `;
+  document.getElementById('btn-do-copy').addEventListener('click', () => {
+    navigator.clipboard.writeText(text).then(()=>{
+      document.getElementById('btn-do-copy').textContent='✅ Copied!';
+      setTimeout(()=>{ const b=document.getElementById('btn-do-copy'); if(b) b.textContent='📋 Copy to clipboard'; },2000);
+    });
+  });
+  document.getElementById('btn-do-download').addEventListener('click', () => {
+    const blob = new Blob([text], {type:'text/plain'});
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `security-review-${(u?.fullname||'user').replace(/\s+/g,'-')}-${Date.now()}.txt`;
+    a.click();
+  });
+}
+
+/* ================================================================
+   SCREEN SWITCHING
+   ================================================================ */
+function showScreen(name) {
+  ['setup','loading','dashboard'].forEach(s => {
+    const el = document.getElementById(`screen-${s}`);
+    if (el) el.style.display = s===name ? (s==='dashboard'?'flex':'flex') : 'none';
+  });
+}
+
+function setLoadingMsg(msg) {
+  const el = document.getElementById('loading-msg');
+  if (el) el.textContent = msg;
+}
+
+/* ================================================================
+   SETUP SCREEN LOGIC
+   ================================================================ */
+document.addEventListener('DOMContentLoaded', () => {
+  // Restore saved values
+  document.getElementById('inp-orgUrl').value = localStorage.getItem('d365sr.orgUrl') || '';
+
+  // Connect button
+  document.getElementById('btn-connect').addEventListener('click', async () => {
+    const orgUrl = document.getElementById('inp-orgUrl').value.trim().replace(/\/+$/, '');
+    const errEl = document.getElementById('setup-error');
+
+    errEl.style.display = 'none';
+    if (!orgUrl || !orgUrl.startsWith('https://')) {
+      errEl.textContent = 'Please enter a valid HTTPS URL for your D365 environment.';
+      errEl.style.display = 'block'; return;
+    }
+    if (!APP_CLIENT_ID || APP_CLIENT_ID === 'YOUR_CLIENT_ID_HERE') {
+      errEl.textContent = 'Tool is not yet configured — contact the tool owner to set up the app registration.';
+      errEl.style.display = 'block'; return;
+    }
+
+    localStorage.setItem('d365sr.orgUrl', orgUrl);
+    S.orgUrl = orgUrl;
+    S.clientId = APP_CLIENT_ID;
+
+    showScreen('loading');
+    setLoadingMsg('Initialising MSAL…');
+    try {
+      initMsal();
+      await S.msal.initialize();
+
+      // Handle redirect callback first
+      const resp = await S.msal.handleRedirectPromise();
+      if (resp) S.account = resp.account;
+
+      setLoadingMsg('Connecting — detecting your session…');
+      await signIn();
+
+      document.getElementById('topbar-env').textContent = `${S.account.username} · ${S.orgUrl}`;
+
+      showScreen('dashboard');
+      setLoadingMsg('');
+
+      // Initial data
+      searchUsers('');
+      fetchOrgStats();
+
+    } catch(e) {
+      showScreen('setup');
+      errEl.textContent = `Sign-in failed: ${e?.message || String(e)}`;
+      errEl.style.display = 'block';
+    }
+  });
+
+  // Sign out
+  document.addEventListener('click', e => {
+    if (e.target.id === 'btn-signout') {
+      if (S.msal && S.account) {
+        S.msal.logoutPopup({ account: S.account }).catch(()=>{});
+      }
+      S.account = null; S.msal = null;
+      showScreen('setup');
+    }
+    if (e.target.id === 'btn-back-to-org') {
+      S.selectedUserId = null; S.selectedUser = null; S.activeSection = null;
+      const copyBtn = document.getElementById('btn-copy-review');
+      if (copyBtn) copyBtn.style.display = 'none';
+      showPane('no-user');
+    }
+    if (e.target.id === 'btn-back-to-user') {
+      S.activeSection = null;
+      renderUserTiles();
+      showPane('user-tiles');
+    }
+    if (e.target.id === 'btn-copy-review') {
+      S.activeSection = 'copy';
+      renderSection('copy');
+    }
+  });
+
+  // User search
+  document.addEventListener('input', e => {
+    if (e.target.id === 'user-search') {
+      clearTimeout(S.searchTimer);
+      S.searchText = e.target.value;
+      S.searchTimer = setTimeout(() => searchUsers(S.searchText), 350);
+    }
+  });
+});
+</script>
+</body>
+</html>
